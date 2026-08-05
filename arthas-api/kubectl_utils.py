@@ -3,7 +3,7 @@ kubectl 工具封装
 把调用 kubectl 的通用逻辑封装成函数，并带自动重试（应对集群偶发连接抖动）。
 """
 import subprocess  # 用来在 Python 里执行外部命令（kubectl）
-import time        # 用来让程序"睡一会儿"（重试间隔）
+import time  # 用来让程序"睡一会儿"（重试间隔）
 
 
 def run_kubectl(args, retries=3):

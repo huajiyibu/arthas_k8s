@@ -1,0 +1,13 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# 备份的 FastAPI 旧版入口不做静态检查（历史参考文件）
+exclude = ["arthas-api/app_fastapi_backup.py"]
+
+[tool.ruff.lint]
+# 只启用有意义的规则：E4/E7/E9(部分 pycodestyle) + F(pyflakes) + I(isort) + UP(pyupgrade)
+select = ["E4", "E7", "E9", "F", "I", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试文件里用大量"手工构造的样例输出"，行长难免超标，忽略行宽
+"arthas-api/test_diagnose.py" = ["E501"]

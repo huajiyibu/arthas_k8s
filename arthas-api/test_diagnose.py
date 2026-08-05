@@ -3,8 +3,7 @@ r"""diagnose.py 中正则解析函数的单元测试（pytest）。
 运行：在 arthas-api 目录下执行
     ..\.venv\Scripts\python.exe -m pytest test_diagnose.py -v
 """
-from diagnose import has_match, extract_uris, filter_match_method
-
+from diagnose import extract_uris, filter_match_method, has_match
 
 # ============ 公共样例数据（基于真实 Arthas 输出） ============
 

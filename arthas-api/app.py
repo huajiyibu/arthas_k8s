@@ -9,14 +9,18 @@ Arthas 注入 + 诊断命令 API 服务（Flask 版）
     1) python app.py                      （Werkzeug 开发服务器，最简单）
     2) flask --app app run --port 8000    （flask 命令）
 """
-from flask import Flask, request, jsonify, render_template
-
+from diagnose import (
+    extract_uris,
+    filter_match_method,
+    has_match,
+    match_business_method,
+    monitor_class,
+    run_with_auto_traffic,
+    trace_method,
+    watch_slow_requests,
+)
+from flask import Flask, jsonify, render_template, request
 from injector import copy_arthas_to_pod, start_arthas
-from diagnose import (watch_slow_requests, match_business_method,
-                      filter_match_method,
-                      trace_method, monitor_class,
-                      extract_uris, has_match,
-                      run_with_auto_traffic)
 from kubectl_utils import list_pods
 
 # 创建 Flask 应用
