@@ -10,9 +10,7 @@ Arthas 注入 + 诊断命令 API 服务（Flask 版）
     2) flask --app app run --port 8000    （flask 命令）
 """
 from diagnose import (
-    extract_uris,
-    filter_match_method,
-    has_match,
+    chain_diagnose,
     match_business_method,
     monitor_class,
     run_with_auto_traffic,
@@ -103,13 +101,12 @@ def read_params(required=(), defaults=None):
 def inject():
     """对指定命名空间下的 Pod 执行注入（拷文件 + attach）。
 
-    入参：{region, cluster, account, namespace(必填), pod[], copy_path}
+    入参：{namespace(必填), pod[], copy_path}
     若未指定 pod，则默认注入该命名空间下所有 Pod。
     """
     params, err = read_params(
         required=("namespace",),
-        defaults={"region": "", "cluster": "", "account": "",
-                  "pod": None, "copy_path": "/tmp/arthas"},
+        defaults={"pod": None, "copy_path": "/tmp/arthas"},
     )
     if err:
         return jsonify(err)
@@ -132,8 +129,7 @@ def inject():
             results.append({"pod": pod_name, "status": "注入成功"})
 
         return jsonify(ok({
-            "region": params["region"], "cluster": params["cluster"],
-            "account": params["account"], "copy_path": params["copy_path"],
+            "copy_path": params["copy_path"],
             "results": results,
         }, "注入成功"))
     except Exception as e:
@@ -163,9 +159,8 @@ def diag_slow_requests():
                 def _run(p):
                     return watch_slow_requests(p, params["cost_time"],
                                                params["namespace"], params["copy_path"])
-                data = maybe_auto_traffic(pod, params, _run, duration=40)
-                results.append({"pod": pod,
-                                "result": data if has_match(data) else "无匹配耗时请求"})
+                per_process = maybe_auto_traffic(pod, params, _run, duration=40)
+                results.append({"pod": pod, "per_process": per_process})
             except Exception as e:
                 results.append({"pod": pod, "result": f"失败: {e}"})
         return jsonify(ok(results))
@@ -196,15 +191,9 @@ def diag_match_method():
                     return match_business_method(p, params["request_uri"],
                                                  params["namespace"], params["copy_path"])
                 # 匹配方法默认就打目标 URI 的流量（如 /slow），命中率最高
-                data = maybe_auto_traffic(pod, params, _run, duration=40,
-                                          default_path=params["request_uri"])
-                matched = filter_match_method(data, params["request_uri"])
-                if matched:
-                    results.append({"pod": pod, "result": matched})
-                else:
-                    results.append({"pod": pod,
-                                    "result": f"未匹配到请求路径 {params['request_uri']} "
-                                              f"对应的业务方法（确认该路径有实际请求流量）"})
+                per_process = maybe_auto_traffic(pod, params, _run, duration=40,
+                                                 default_path=params["request_uri"])
+                results.append({"pod": pod, "per_process": per_process})
             except Exception as e:
                 results.append({"pod": pod, "result": f"失败: {e}"})
         return jsonify(ok(results))
@@ -235,9 +224,8 @@ def diag_trace():
                     return trace_method(p, params["class_name"], params["method_name"],
                                         params["cost_time"],
                                         params["namespace"], params["copy_path"])
-                data = maybe_auto_traffic(pod, params, _run, duration=40)
-                results.append({"pod": pod,
-                                "result": data if has_match(data) else "无匹配耗时请求/方法"})
+                per_process = maybe_auto_traffic(pod, params, _run, duration=40)
+                results.append({"pod": pod, "per_process": per_process})
             except Exception as e:
                 results.append({"pod": pod, "result": f"失败: {e}"})
         return jsonify(ok(results))
@@ -267,9 +255,9 @@ def diag_monitor():
                 def _run(p):
                     return monitor_class(p, params["class_name"], params["cycle"],
                                          params["namespace"], params["copy_path"])
-                data = maybe_auto_traffic(pod, params, _run, duration=params["cycle"] + 15)
-                results.append({"pod": pod,
-                                "result": data if has_match(data) else "无匹配耗时请求/方法"})
+                per_process = maybe_auto_traffic(pod, params, _run,
+                                                 duration=params["cycle"] + 15)
+                results.append({"pod": pod, "per_process": per_process})
             except Exception as e:
                 results.append({"pod": pod, "result": f"失败: {e}"})
         return jsonify(ok(results))
@@ -300,26 +288,11 @@ def diag_chain():
         for pod in pod_list:
             try:
                 def _chain(p):
-                    # ① 查慢接口
-                    slow_output = watch_slow_requests(p, params["cost_time"],
-                                                      params["namespace"], params["copy_path"])
-                    uris = extract_uris(slow_output)
-
-                    # ② 对每个慢接口 URI，匹配对应的业务类与方法
-                    methods = []
-                    for uri in uris:
-                        try:
-                            m = match_business_method(p, uri,
-                                                      params["namespace"], params["copy_path"])
-                            matched = filter_match_method(m, uri)
-                            methods.append({"uri": uri, "match": matched})
-                        except Exception as e:
-                            methods.append({"uri": uri, "match": f"匹配失败: {e}"})
-
-                    return {"pod": p, "uris": uris, "methods": methods}
+                    return chain_diagnose(p, params["cost_time"],
+                                          params["namespace"], params["copy_path"])
 
                 chain_result = maybe_auto_traffic(pod, params, _chain, duration=70)
-                results.append(chain_result)
+                results.append({"pod": pod, "per_process": chain_result})
             except Exception as e:
                 results.append({"pod": pod, "result": f"失败: {e}"})
 

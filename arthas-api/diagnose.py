@@ -1,31 +1,40 @@
 """
 诊断命令封装（阶段 5）
-通过 Pod 里的 arthas-client 连接已注入的 Arthas 服务端(3658)，
+通过 Pod 里的 arthas-client 连接已注入的 Arthas 服务端，
 非交互执行诊断命令，对应需求文档 3.2 的 4 类诊断接口。
+
+多进程支持：一个 Pod 里可能有多个 JVM（应用 + 边车 agent），每个 JVM 各自有
+独立的 Arthas 服务端端口（注入时分配并记录在 injector 的注册表里）。
+诊断时对 Pod 内**每个**进程逐个执行命令，返回每进程独立结果。
 """
 import re
 import subprocess
 import threading
 import time
 
+from injector import get_attached_processes
+
 
 def run_arthas_command(pod, command, namespace="default",
-                       copy_path="/tmp/arthas", timeout=30, retries=3):
+                       copy_path="/tmp/arthas", timeout=30, retries=3,
+                       port=3658):
     """在 Pod 里用 arthas-client 非交互执行一条 Arthas 命令。
 
     原理:
-        attach 后 Arthas 服务端监听在 Pod 内的 127.0.0.1:3658。
-        arthas-client.jar 可以非交互连接服务端执行命令（-c 参数指定命令）。
+        attach 后每个 JVM 各有自己的 Arthas 服务端，监听在 Pod 内的 127.0.0.1:<port>
+        （默认 3658；多进程时由注入层分配 3658/3659/...，见 injector 注册表）。
+        arthas-client.jar 可以非交互连接指定端口的服务端执行命令（-c 参数指定命令）。
         我们 kubectl exec 到 Pod 里运行它，把命令传进去，拿到结果。
         带自动重试：应对集群偶发连接抖动（TLS 握手超时）。
 
     参数:
-        pod:       目标 Pod 名称
-        command:   Arthas 命令字符串，如 "trace demo.MathGame primeFactors -n 1"
-        namespace: 命名空间
-        copy_path: arthas 工具在 Pod 内的路径，默认 /tmp/arthas
-        timeout:   单次命令超时秒数，默认 30（需求 4.3：命令执行超时统一 30s）
-        retries:   失败重试次数，默认 3
+        pod:        目标 Pod 名称
+        command:    Arthas 命令字符串，如 "trace demo.MathGame primeFactors -n 1"
+        namespace:  命名空间
+        copy_path:  arthas 工具在 Pod 内的路径，默认 /tmp/arthas
+        timeout:    单次命令超时秒数，默认 30（需求 4.3：命令执行超时统一 30s）
+        retries:    失败重试次数，默认 3
+        port:       要连接的 Arthas 服务端端口（每个 JVM 一个，默认 3658）
     返回:
         命令执行输出
     异常:
@@ -37,7 +46,8 @@ def run_arthas_command(pod, command, namespace="default",
     for attempt in range(retries):
         proc = subprocess.Popen(
             ["kubectl", "exec", "-n", namespace, pod, "--",
-             "java", "-jar", client_jar, "-c", command],
+             "java", "-jar", client_jar,
+             "127.0.0.1", str(port), "-c", command],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
         try:
@@ -143,19 +153,57 @@ def extract_uris(watch_output):
     return result
 
 
+def _run_all_processes(pod, command, namespace="default", copy_path="/tmp/arthas",
+                       timeout=30, retries=3, no_match_msg="无匹配耗时请求"):
+    """对一个 Pod 里所有已 attach 的 JVM，逐个跑同一条 Arthas 命令（每进程独立诊断）。
+
+    返回: [{"pid","process","port","matched","result"}, ...]
+        - 逐进程执行：Pod 里有多少个 JVM 就测多少个，一个不漏；
+        - matched=False 时 result 放友好提示（需求 4.3：无匹配要提示，而不是报失败）。
+    """
+    procs = get_attached_processes(namespace, pod)
+    per_process = []
+    for p in procs:
+        output = run_arthas_command(pod, command, namespace, copy_path,
+                                    timeout=timeout, retries=retries,
+                                    port=p["port"])
+        matched = has_match(output)
+        per_process.append({
+            "pid": p["pid"], "process": p["process"], "port": p["port"],
+            "matched": matched,
+            "result": output if matched else no_match_msg,
+        })
+    return per_process
+
+
 def watch_slow_requests(pod, cost_time, namespace="default", copy_path="/tmp/arthas"):
-    """接口1: 查询耗时超过 cost_time(ms) 的请求路径（需求文档 3.2.1）"""
+    """接口1: 查询耗时超过 cost_time(ms) 的请求路径（需求文档 3.2.1）。
+
+    对 Pod 内所有 JVM 逐个执行，返回每进程结果列表。
+    """
     command = (
         "watch org.apache.catalina.core.ApplicationFilterChain doFilter "
         "'{params[0].getRequestURI(), params[1].getStatus()}' -x 2 "
         f"'#cost>{cost_time}' -n 5"
     )
-    return run_arthas_command(pod, command, namespace, copy_path)
+    return _run_all_processes(pod, command, namespace, copy_path)
+
+
+def _match_method_on_port(pod, request_uri, namespace, copy_path, port):
+    """在指定 Arthas 端口（= 指定 JVM）上跑匹配命令，返回 {class,method} 或 None。"""
+    command = (
+        "watch org.springframework.web.servlet.DispatcherServlet doDispatch "
+        "'{params[0].getRequestURI(), target.getHandler(params[0])}' "
+        "-n 50"
+    )
+    output = run_arthas_command(pod, command, namespace, copy_path,
+                                port=port)
+    return filter_match_method(output, request_uri)
 
 
 def match_business_method(pod, request_uri, namespace="default",
                           copy_path="/tmp/arthas"):
-    """接口2: 根据请求路径匹配业务类与方法（需求文档 3.2.2）
+    """接口2: 根据请求路径匹配业务类与方法（需求文档 3.2.2）。每进程独立执行。
 
     ⚠️ 踩坑记录（真实 Web 应用验证发现）：
       1) arthas-client 的 -c 参数会把命令里的单/双引号都剥掉，
@@ -171,12 +219,19 @@ def match_business_method(pod, request_uri, namespace="default",
               [com.example.demo.DemoController#slow()] and 2 interceptors],
       ]
     """
-    command = (
-        "watch org.springframework.web.servlet.DispatcherServlet doDispatch "
-        "'{params[0].getRequestURI(), target.getHandler(params[0])}' "
-        "-n 50"
-    )
-    return run_arthas_command(pod, command, namespace, copy_path)
+    procs = get_attached_processes(namespace, pod)
+    per_process = []
+    for p in procs:
+        matched = _match_method_on_port(pod, request_uri, namespace, copy_path,
+                                        p["port"])
+        per_process.append({
+            "pid": p["pid"], "process": p["process"], "port": p["port"],
+            "matched": matched is not None,
+            "match": matched,
+            "result": (matched if matched else
+                       f"未匹配到请求路径 {request_uri} 对应的业务方法"),
+        })
+    return per_process
 
 
 def filter_match_method(watch_output, request_uri):
@@ -198,23 +253,61 @@ def filter_match_method(watch_output, request_uri):
 
 def trace_method(pod, class_name, method_name, cost_time, namespace="default",
                  copy_path="/tmp/arthas"):
-    """接口3: 方法耗时调用栈追踪（需求文档 3.2.3）"""
+    """接口3: 方法耗时调用栈追踪（需求文档 3.2.3）。每进程独立执行。"""
     command = (
         f"trace {class_name} {method_name} -n 5 "
         f"'#cost>{cost_time}' --skipJDKMethod false"
     )
-    return run_arthas_command(pod, command, namespace, copy_path)
+    return _run_all_processes(pod, command, namespace, copy_path,
+                              no_match_msg="无匹配耗时请求/方法")
 
 
 def monitor_class(pod, class_name, cycle, namespace="default",
                   copy_path="/tmp/arthas"):
-    """接口4: 业务方法性能统计排序 Top5（需求文档 3.2.4）
+    """接口4: 业务方法性能统计排序 Top5（需求文档 3.2.4）。每进程独立执行。
 
     monitor 是周期性持续输出的，用 timeout 控制执行时长。
     """
     command = f"monitor -c {cycle} {class_name} *"
-    # monitor 需要跑一个统计周期，超时多给一点
-    return run_arthas_command(pod, command, namespace, copy_path, timeout=cycle + 10)
+    return _run_all_processes(pod, command, namespace, copy_path,
+                              timeout=cycle + 10,
+                              no_match_msg="无匹配耗时请求/方法")
+
+
+def chain_diagnose(pod, cost_time, namespace="default", copy_path="/tmp/arthas"):
+    """完整排查链路：慢接口 -> 绑方法（每进程独立，返回每进程结果）。
+
+    对 Pod 内每个 JVM：
+      ① 在它自己的 Arthas 端口上查慢接口，提取 URI；
+      ② 对每个 URI 在同一个端口上匹配业务类与方法。
+    返回: [{"pid","process","port","uris","methods"}, ...]
+    """
+    watch_command = (
+        "watch org.apache.catalina.core.ApplicationFilterChain doFilter "
+        "'{params[0].getRequestURI(), params[1].getStatus()}' -x 2 "
+        f"'#cost>{cost_time}' -n 5"
+    )
+    procs = get_attached_processes(namespace, pod)
+    per_process = []
+    for p in procs:
+        slow_output = run_arthas_command(pod, watch_command, namespace, copy_path,
+                                         port=p["port"])
+        uris = extract_uris(slow_output)
+        methods = []
+        for uri in uris:
+            try:
+                methods.append({
+                    "uri": uri,
+                    "match": _match_method_on_port(pod, uri, namespace, copy_path,
+                                                   p["port"]),
+                })
+            except Exception as e:
+                methods.append({"uri": uri, "match": f"匹配失败: {e}"})
+        per_process.append({
+            "pid": p["pid"], "process": p["process"], "port": p["port"],
+            "uris": uris, "methods": methods,
+        })
+    return per_process
 
 
 if __name__ == "__main__":
