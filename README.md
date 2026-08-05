@@ -3,6 +3,8 @@
 > 对 Kubernetes 集群中运行的 **Java 应用 Pod 自动注入 Arthas**，并提供一个 **Flask 网页控制台 + REST API**，
 > 让你**不用进容器敲命令**，点点按钮就能排查"哪个接口慢、慢在哪、对应哪个业务方法"。
 
+[![CI](https://github.com/huajiyibu/arthas_k8s/actions/workflows/ci.yml/badge.svg)](https://github.com/huajiyibu/arthas_k8s/actions/workflows/ci.yml)
+
 对应需求文档：[`Pod注入Arthas工具及诊断命令API服务需求文档.md`](./Pod注入Arthas工具及诊断命令API服务需求文档.md)
 
 ---
@@ -170,3 +172,7 @@ curl -X POST http://127.0.0.1:8000/diagnose/chain -H "Content-Type: application/
 - [`学习日志.md`](./学习日志.md) —— 开发过程学习记录
 - [`实现与需求差异记录.md`](./实现与需求差异记录.md) —— 需求 vs 实现差异对照
 - [`验证状态记录.md`](./验证状态记录.md) —— 验证进度与踩坑记录
+
+## 📄 License
+
+[MIT](./LICENSE) © 2026 huajiyibu
