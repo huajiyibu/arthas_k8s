@@ -18,6 +18,9 @@ sudoer_setup.sh
 verify_*.sh
 gen_slow.sh
 
+# ---------- 内部接口文档（含内网域名/账号命名空间，仅本地参考，禁止上传） ----------
+获取CSK集群最大权限kubeconfig接口.md
+
 # ---------- Arthas 输出 / 临时文件 ----------
 arthas-output/
 *.log
