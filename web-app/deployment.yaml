@@ -1,0 +1,22 @@
+# Web 应用部署：2 个副本，会分布到 master 和 worker 两个节点
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-web
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: demo-web
+  template:
+    metadata:
+      labels:
+        app: demo-web
+    spec:
+      containers:
+      - name: demo-web
+        image: demo-web:1.0
+        imagePullPolicy: IfNotPresent   # 用 containerd 里已有的镜像
+        ports:
+        - containerPort: 8080

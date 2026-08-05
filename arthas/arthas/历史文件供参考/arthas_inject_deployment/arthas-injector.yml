@@ -1,0 +1,176 @@
+# 第一步：创建ClusterRole，定义注入器的权限。
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: arthas-batch-injector-clusterrole
+rules:
+  # Operational permissions (unchanged)
+  - apiGroups: [""] # Core API group
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""] # Core API group
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: ["apps"] # For Deployments, StatefulSets, etc.
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch"]
+
+  # Permissions for cleanup
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterrolebindings"]       
+    resourceNames: ["arthas-batch-injector-binding"] # <<<只能删除自身，没有其他权限
+    verbs: ["delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"] 
+    resourceNames: ["arthas-batch-injector-clusterrole"] # <<< 只能删除自身，没有其他权限
+    verbs: ["delete"]
+
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding # Cluster-wide binding
+metadata:
+  name: arthas-batch-injector-binding
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: arthas-batch-injector-clusterrole
+  apiGroup: rbac.authorization.k8s.io
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: arthas-batch-injector
+  namespace: default
+spec:
+  backoffLimit: 3
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      name: arthas-batch-injector-pod
+    spec:
+      serviceAccountName: default # Ensure this ServiceAccount is bound to the Role
+      restartPolicy: Never
+      volumes:
+      - name: targets-volume
+        configMap:
+          name: arthas-targets
+      containers:
+      - name: arthas-batch-injector
+        image: 10.124.142.91/istio/arthas-file:1.1 
+        volumeMounts:
+        - name: targets-volume
+          mountPath: "/config"
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -e # Exit immediately if a command exits with a non-zero status.
+          echo "准备arthas文件，文件目录为/tmp/arthas..."
+          cp -r /arthas /tmp/arthas
+
+          echo "从Configmap读取deloyment： /config/targets.txt..."
+
+          # Use a while read loop for robust line-by-line processing from the file
+          # This is generally safer than 'cat file | while read ...' or 'for line in $(cat file)'
+          while IFS= read -r line || [ -n "$line" ]; do # The `|| [ -n "$line" ]` processes the last line if it lacks a newline
+            # Remove leading/trailing whitespace from line
+            line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+            # Skip empty lines or lines starting with # (comments)
+            if echo "$line" | grep -q -E '^\s*#|^\s*$'; then # -q for quiet, -E for extended regex
+              echo "Skipping comment or empty line: [$line]"
+              continue
+            fi
+
+            echo "正在处理： [$line]"
+
+            # 用POSIX避免截断
+            case "$line" in
+              *:*) # Line contains a colon
+                ns=$(echo "$line" | cut -d: -f1)
+                deployment_name=$(echo "$line" | cut -d: -f2-) # Takes everything after the first colon
+                ;;
+              *)   # Line does not contain a colon, assume default namespace
+                ns="default"
+                deployment_name="$line"
+                ;;
+            esac
+            
+            # Further sanitize ns and deployment_name from potential extra whitespace if cut/echo added any
+            ns=$(echo "$ns" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+            deployment_name=$(echo "$deployment_name" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+            if [ -z "$ns" ] || [ -z "$deployment_name" ]; then
+                echo "Error: Namespace or Deployment name is empty after parsing line: [$line]. Skipping."
+                continue
+            fi
+
+            echo "-----------------------------------------------------"
+            echo "正在处理: [$ns/$deployment_name]"
+
+            # Get the label selector for the Deployment. Errors will be caught by 'set -e' or can be checked.
+            # Adding 2>/dev/null to suppress kubectl errors if deployment not found, we check SELECTOR below.
+            SELECTOR=$(kubectl get deployment "$deployment_name" -n "$ns" -o go-template --template='{{range $k,$v := .spec.selector.matchLabels}}{{$k}}={{$v}},{{end}}' 2>/dev/null | sed 's/,$//')
+
+            if [ -z "$SELECTOR" ]; then
+              echo "Error: Could not get label selector for Deployment '$ns/$deployment_name', or Deployment does not exist. Skipping."
+              continue
+            fi
+            echo "Label selector for Deployment '$ns/$deployment_name': [$SELECTOR]"
+
+            # Get all pod names for that deployment using the selector. Suppress errors, check POD_NAMES.
+            POD_NAMES=$(kubectl get pods -n "$ns" -l "$SELECTOR" --no-headers -o custom-columns=":metadata.name" 2>/dev/null)
+
+            if [ -z "$POD_NAMES" ]; then
+              echo "No active Pods found for Deployment '$ns/$deployment_name' with selector [$SELECTOR]. Skipping."
+              continue
+            fi
+            echo "Found Pods for Deployment '$ns/$deployment_name': [$POD_NAMES]"
+            
+            # Loop through pod names (they are space/newline separated from custom-columns)
+            for pod_name_raw in $POD_NAMES; do
+              # Sanitize pod_name from potential whitespace
+              pod_name=$(echo "$pod_name_raw" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+              if [ -z "$pod_name" ]; then
+                continue
+              fi
+              echo "  正在注入: [$ns/$pod_name] ..."
+              if kubectl cp /tmp/arthas "$ns/$pod_name:/tmp/arthas"; then
+                echo "  注入成功 [$ns/$pod_name]"
+              else
+                # set -e would have exited, but if not using set -e, this warning is useful
+                echo "  Warning: 注入失败 [$ns/$pod_name] ." 
+              fi
+            done
+            echo "成功读取: [$ns/$deployment_name]"
+            echo "-----------------------------------------------------"
+          done < "/config/targets.txt" # Read directly from the mounted ConfigMap file
+
+          echo "所有指定注入已完成。"
+
+          echo "清理/tmp/arthas文件..."
+          rm -rf /tmp/arthas
+
+          echo "清理RBAC资源..."
+          CR_DELETED_SUCCESSFULLY=false
+
+          # 2. Delete the ClusterRole
+          # The ClusterRole has a rule to allow its own deletion by resourceName.
+          # This is the tricky part: the permission was granted by the binding we just tried to delete.
+          # Kubernetes might allow this if the API server evaluates permissions at the start of the request,
+          # or if the 'delete self' via resourceName has special handling.
+          echo "Attempting to delete ClusterRole 'arthas-batch-injector-clusterrole'..."
+          if kubectl delete clusterrole arthas-batch-injector-clusterrole --ignore-not-found=true; then
+            echo "ClusterRole 'arthas-batch-injector-clusterrole' deletion command sent."
+            CR_DELETED_SUCCESSFULLY=true
+          else
+            echo "Warning: Command to delete ClusterRole 'arthas-batch-injector-clusterrole' failed. This might happen if the ClusterRoleBinding was deleted first and permissions were lost too quickly."
+          fi
+
+          echo "清理完成"

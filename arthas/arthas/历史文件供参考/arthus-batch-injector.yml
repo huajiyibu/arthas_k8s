@@ -1,0 +1,89 @@
+
+# 1. Role (定义在 default 命名空间中 default Service Account 将拥有的权限)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  # namespace: default # 明确指定 default 命名空间
+  name: arthas-batch-injector-role # Role 的名字
+rules:
+# 允许对 default 命名空间中的核心资源进行读操作
+- apiGroups: [""] # "" 表示核心 API 组
+  resources: ["pods", "services", "configmaps", "secrets", "serviceaccounts", "persistentvolumeclaims", "events"]
+  verbs: ["get", "list", "watch","exec","create","delete"]
+# 允许对 default 命名空间中的 apps 资源进行读操作
+- apiGroups: ["apps"]
+  resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+  verbs: ["get", "list", "watch","exec"]
+# 允许对 default 命名空间中的 batch 资源进行读操作
+- apiGroups: ["batch"]
+  resources: ["jobs", "cronjobs"]
+  verbs: ["get", "list", "watch"]
+# 如果你需要测试创建、删除等写操作，需要在这里添加相应的 verbs，例如 "create", "update", "patch", "delete"
+# 例如，允许创建和删除 ConfigMaps：
+- apiGroups: [""] # Core API group
+  resources: ["pods/exec"]
+  verbs: ["create"]
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["roles"]
+  verbs: ["get", "list", "delete"]
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["rolebindings"]
+  verbs: ["get", "list", "delete"]
+
+---
+# 2. RoleBinding (将上面的 Role 赋予 default 命名空间中的 default Service Account)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: arthas-batch-injector-binding # RoleBinding 的名字
+subjects:
+- kind: ServiceAccount
+  name: default # 指向 default Service Account
+  namespace: default # default Service Account 所在的命名空间
+roleRef:
+  kind: Role # 指向上面创建的 Role
+  name: arthas-batch-injector-role # 上面 Role 的名字
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# 3. Pod (运行在 default 命名空间，使用 default Service Account)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: arthas-batch-injector
+  namespace: default # 明确指定 default 命名空间
+spec:
+  restartPolicy: Never
+  containers:
+    - name: arthas-batch-injector
+      image: 10.124.142.91/istio/arthas-file:1.1
+      env:
+        # 用户可在这里填写目标 namespace 和 pod 列表
+        - name: TARGETS
+          # 例如: default:podA,podB;ns2:podC,podD
+          value: "default:net-test-daemonset-g95zb"
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          echo "解析目标列表: $TARGETS"
+          cp -r /arthas /tmp/arthas
+          OLDIFS="$IFS"
+          IFS=';'
+          for ns_pods in $TARGETS; do
+            ns=${ns_pods%%:*}
+            pods_str=${ns_pods#*:}
+            IFS=',' 
+            for pod in $pods_str; do
+              echo "注入到 $ns/$pod ..."
+              kubectl cp /tmp/arthas $ns/$pod:/tmp/arthas
+            done
+          done
+          IFS="$OLDIFS"
+          echo "全部注入完成"
+          sleep 10
+          # 自动删除 RBAC 资源
+          echo "正在删除 RBAC 资源..."
+          kubectl delete role arthas-batch-injector-role -n default
+          # kubectl delete rolebinding arthas-batch-injector-binding -n default
+          echo "RBAC 资源已删除"
+          sleep 10

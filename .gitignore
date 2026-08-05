@@ -1,0 +1,22 @@
+# ---------- Python ----------
+.venv/
+__pycache__/
+*.pyc
+
+# ---------- Java / Maven 构建产物 ----------
+web-app/target/
+
+# ---------- 敏感/本地验证脚本（含 SSH/sudo 密码，禁止上传） ----------
+sudoer_setup.sh
+verify_*.sh
+gen_slow.sh
+
+# ---------- Arthas 输出 / 临时文件 ----------
+arthas-output/
+*.log
+
+# ---------- IDE / OS ----------
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

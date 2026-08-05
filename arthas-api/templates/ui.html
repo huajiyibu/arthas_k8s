@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arthas 诊断 API 控制台</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: "Microsoft YaHei", sans-serif; margin: 0; background: #f0f2f5; color: #333; }
+  header { background: #1f2937; color: #fff; padding: 16px 24px; }
+  header h1 { margin: 0; font-size: 20px; }
+  header p { margin: 4px 0 0; font-size: 13px; color: #9ca3af; }
+  main { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  .card { background: #fff; border-radius: 8px; padding: 16px 20px; margin-bottom: 16px;
+          box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  .card h2 { margin: 0 0 4px; font-size: 16px; }
+  .card .desc { margin: 0 0 12px; font-size: 13px; color: #6b7280; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+  label { display: flex; flex-direction: column; font-size: 12px; color: #555; gap: 4px; }
+  label input, label select { padding: 7px 9px; border: 1px solid #d1d5db; border-radius: 6px;
+          font-size: 14px; min-width: 180px; }
+  .full { flex: 1; }
+  button { background: #2563eb; color: #fff; border: 0; border-radius: 6px; padding: 9px 18px;
+           font-size: 14px; cursor: pointer; }
+  button:hover { background: #1d4ed8; }
+  button.secondary { background: #6b7280; }
+  pre { background: #111827; color: #e5e7eb; padding: 12px; border-radius: 6px; overflow: auto;
+        font-size: 13px; max-height: 380px; white-space: pre-wrap; word-break: break-all; }
+  .hint { font-size: 12px; color: #9ca3af; margin-top: 8px; }
+  .ok { border-left: 4px solid #22c55e; }
+  .err { border-left: 4px solid #ef4444; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🛠️ Arthas 诊断 API 控制台</h1>
+  <p>填参数 → 点按钮 → 直接调后端接口拿结果。pod 可填多个（逗号分隔），不填 = 该命名空间全部。</p>
+</header>
+<main>
+
+  <!-- 公共参数 -->
+  <div class="card">
+    <h2>公共参数</h2>
+    <p class="desc">每个接口都会用到，改这里即可。</p>
+    <div class="row">
+      <label>命名空间 namespace
+        <input id="ns" value="default">
+      </label>
+      <label class="full">Pod（逗号分隔，留空=全部）
+        <input id="pod" placeholder="如 demo-web-xxx 或留空">
+      </label>
+      <label>copy_path
+        <input id="copyPath" value="/tmp/arthas">
+      </label>
+    </div>
+    <div class="row">
+      <label style="flex-direction:row;align-items:center;gap:6px">
+        <input id="autoTraffic" type="checkbox" checked style="min-width:auto">
+        <b>自动打流量</b>（监控时自动访问 Pod 产生请求，免手动）
+      </label>
+      <label>流量路径
+        <input id="trafficPath" value="/slow">
+      </label>
+      <label>流量端口
+        <input id="trafficPort" type="number" value="8080">
+      </label>
+    </div>
+  </div>
+
+  <!-- 注入 -->
+  <div class="card">
+    <h2>① 注入 Arthas</h2>
+    <p class="desc">把 Arthas 拷进 Pod 并 attach（诊断前先注入一次）。</p>
+    <div class="row">
+      <label>region <input id="inject_region" value=""></label>
+      <label>cluster <input id="inject_cluster" value=""></label>
+      <label>account <input id="inject_account" value=""></label>
+    </div>
+    <button onclick="run('/inject', collectInject())">🚀 执行注入</button>
+  </div>
+
+  <!-- 接口1 -->
+  <div class="card">
+    <h2>② 慢接口查询</h2>
+    <p class="desc">查耗时超过阈值的请求路径（watch 型：建议开着再打点流量）。</p>
+    <div class="row">
+      <label>cost_time(ms) 阈值 <input id="s_cost" type="number" value="1000"></label>
+    </div>
+    <button onclick="run('/diagnose/slow-requests', collectBase({cost_time: +val('s_cost')}))">🔍 查询慢接口</button>
+  </div>
+
+  <!-- 接口2 -->
+  <div class="card">
+    <h2>③ 匹配业务方法</h2>
+    <p class="desc">根据请求路径找出对应的业务类与方法。</p>
+    <div class="row">
+      <label>request_uri 路径 <input id="m_uri" value="/slow"></label>
+    </div>
+    <button onclick="run('/diagnose/match-method', collectBase({request_uri: val('m_uri')}))">🎯 匹配方法</button>
+  </div>
+
+  <!-- 接口3 -->
+  <div class="card">
+    <h2>④ 方法栈追踪</h2>
+    <p class="desc">追踪方法内部调用栈的耗时分布。</p>
+    <div class="row">
+      <label>class_name <input id="t_cls" value="com.example.demo.DemoController"></label>
+      <label>method_name <input id="t_mtd" value="slow"></label>
+      <label>cost_time(ms) <input id="t_cost" type="number" value="0"></label>
+    </div>
+    <button onclick="run('/diagnose/trace', collectBase({class_name: val('t_cls'), method_name: val('t_mtd'), cost_time: +val('t_cost')}))">🔬 追踪</button>
+  </div>
+
+  <!-- 接口4 -->
+  <div class="card">
+    <h2>⑤ 方法性能统计</h2>
+    <p class="desc">统计类下所有方法的调用次数/平均耗时/失败率。</p>
+    <div class="row">
+      <label>class_name <input id="mon_cls" value="com.example.demo.DemoController"></label>
+      <label>cycle(秒) <input id="mon_cyc" type="number" value="10"></label>
+    </div>
+    <button onclick="run('/diagnose/monitor', collectBase({class_name: val('mon_cls'), cycle: +val('mon_cyc')}))">📊 统计</button>
+  </div>
+
+  <!-- 链路 -->
+  <div class="card">
+    <h2>⑥ 完整链路</h2>
+    <p class="desc">一步完成：慢接口 → 绑业务方法（耗时较长，请耐心等）。</p>
+    <div class="row">
+      <label>cost_time(ms) 阈值 <input id="c_cost" type="number" value="1000"></label>
+    </div>
+    <button onclick="run('/diagnose/chain', collectBase({cost_time: +val('c_cost')}))">⛓️ 跑完整链路</button>
+  </div>
+
+  <!-- 结果 -->
+  <div class="card" id="resultCard" style="display:none">
+    <h2>结果 <button class="secondary" onclick="clearResult()" style="float:right;padding:4px 10px">清空</button></h2>
+    <div id="resultMeta"></div>
+    <pre id="result"></pre>
+    <p class="hint">提示：返回里 code=200 成功；code=500 看 msg 原因。</p>
+  </div>
+
+</main>
+<script>
+  function val(id){ return document.getElementById(id).value.trim(); }
+  function collectBase(extra){
+    var body = { namespace: val('ns'), copy_path: val('copyPath') };
+    body.auto_traffic = document.getElementById('autoTraffic').checked;
+    body.traffic_path = val('trafficPath') || '/slow';
+    body.traffic_port = parseInt(val('trafficPort')) || 8080;
+    var pod = val('pod');
+    if (pod) body.pod = pod.split(',').map(s => s.trim()).filter(Boolean);
+    return Object.assign(body, extra || {});
+  }
+  function collectInject(){
+    var body = collectBase({});
+    body.region = val('inject_region'); body.cluster = val('inject_cluster'); body.account = val('inject_account');
+    return body;
+  }
+  async function run(url, body){
+    var card = document.getElementById('resultCard');
+    var meta = document.getElementById('resultMeta');
+    var pre = document.getElementById('result');
+    card.style.display = 'block';
+    meta.className = 'hint';
+      meta.textContent = '请求中 ' + url + ' ...（若勾选了自动打流量，正在自动造流量）';
+    pre.textContent = '...';
+    try {
+      var resp = await fetch(url, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      var txt = await resp.text();
+      var data;
+      try { data = JSON.parse(txt); } catch(e){ data = txt; }
+      pre.textContent = JSON.stringify(data, null, 2);
+      if (data && data.code === 200) { card.classList.add('ok'); card.classList.remove('err'); meta.textContent = '✅ 成功 (' + url + ')'; }
+      else { card.classList.remove('ok'); card.classList.add('err'); meta.textContent = '⚠️ 未成功 (' + url + ')'; }
+    } catch(e){
+      pre.textContent = '请求失败: ' + e;
+      card.classList.remove('ok'); card.classList.add('err'); meta.textContent = '❌ 错误 (' + url + ')';
+    }
+  }
+  function clearResult(){ document.getElementById('resultCard').style.display = 'none'; }
+</script>
+</body>
+</html>

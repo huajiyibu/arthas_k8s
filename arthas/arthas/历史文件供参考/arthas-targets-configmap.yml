@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: arthas-targets
+  namespace: default
+data:
+  targets.txt: |
+    default:net-test-daemonset-g95zb
+    # 示例扩展格式：
+    # default:podA,podB
+    # ns2:podC,podD

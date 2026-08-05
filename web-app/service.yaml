@@ -1,0 +1,12 @@
+# Service：让集群内/本地能访问 demo-web（后面用来发请求造"慢接口"流量）
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-web
+  namespace: default
+spec:
+  selector:
+    app: demo-web
+  ports:
+  - port: 8080
+    targetPort: 8080

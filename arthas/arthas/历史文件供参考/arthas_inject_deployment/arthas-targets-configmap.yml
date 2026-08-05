@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: arthas-targets
+  namespace: default # Assuming your deployments are also in the 'default' namespace, adjust if needed
+data:
+  targets.txt: |
+    default:image-cache-controller
+    csm-system:srvmesh-mng-controller-api-v2-3-8

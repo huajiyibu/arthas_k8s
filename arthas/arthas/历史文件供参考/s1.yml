@@ -1,0 +1,91 @@
+# 1. Role (定义在 default 命名空间中 default Service Account 将拥有的权限)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: arthas-batch-injector-role
+rules:
+- apiGroups: [""] 
+  resources: ["pods", "services", "configmaps", "secrets", "serviceaccounts", "persistentvolumeclaims", "events"]
+  verbs: ["get", "list", "watch","exec","create","delete"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+  verbs: ["get", "list", "watch","exec"]
+- apiGroups: ["batch"]
+  resources: ["jobs", "cronjobs"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""] 
+  resources: ["pods/exec"]
+  verbs: ["create"]
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["roles", "rolebindings"]
+  verbs: ["get", "list", "delete"]
+
+---
+# 2. RoleBinding (将Role赋予default Service Account)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: arthas-batch-injector-binding
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: default
+roleRef:
+  kind: Role
+  name: arthas-batch-injector-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# 3. Job (替代原Pod执行注入任务)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: arthas-batch-injector
+  namespace: default
+spec:
+  backoffLimit: 3  # 失败重试次数
+  completions: 1    # 需要完成的任务数
+  parallelism: 1    # 并行执行数
+  template:
+    metadata:
+      name: arthas-batch-injector-pod
+    spec:
+      restartPolicy: Never  # Job控制重试，Pod不自动重启
+      volumes:
+        - name: targets-volume
+          configMap:
+            name: arthas-targets  # 挂载上面创建的ConfigMap
+      containers:
+        - name: arthas-batch-injector
+          image: 10.124.142.91/istio/arthas-file:1.1
+          volumeMounts:
+            - name: targets-volume
+              mountPath: "/config"  # 挂载到容器内/config目录
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "从ConfigMap读取目标列表..."
+              TARGETS=$(cat /config/targets.txt)  # 从挂载文件读取目标列表
+              echo "解析目标列表: $TARGETS"
+              
+              cp -r /arthas /tmp/arthas
+              OLDIFS="$IFS"
+              IFS=';'
+              for ns_pods in $TARGETS; do
+                ns=${ns_pods%%:*}
+                pods_str=${ns_pods#*:}
+                IFS=',' 
+                for pod in $pods_str; do
+                  echo "注入到 $ns/$pod ..."
+                  kubectl cp /tmp/arthas $ns/$pod:/tmp/arthas
+                done
+              done
+              IFS="$OLDIFS"
+              echo "全部注入完成"
+              
+              # 清理临时文件和RBAC资源
+              rm -rf /tmp/arthas
+              echo "正在删除RBAC资源..."
+              kubectl delete role arthas-batch-injector-role -n default
+              kubectl delete rolebinding arthas-batch-injector-binding -n default
+              echo "资源清理完成"

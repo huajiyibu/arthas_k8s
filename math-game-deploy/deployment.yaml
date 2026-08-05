@@ -1,0 +1,21 @@
+# math-game 应用部署清单
+# 部署 math-game（我们练习 Arthas 用的 Java 应用）到集群
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: math-game
+  namespace: default
+spec:
+  replicas: 1          # 想要 1 个副本
+  selector:
+    matchLabels:
+      app: math-game   # 管理哪些 Pod（通过标签匹配）
+  template:
+    metadata:
+      labels:
+        app: math-game # Pod 的标签
+    spec:
+      containers:
+      - name: math-game
+        image: math-game:jdk        # 用 JDK 版镜像（注入 Arthas 需要 attach 能力）
+        imagePullPolicy: IfNotPresent  # 不从远程拉，用 containerd 里已有的
