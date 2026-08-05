@@ -6,10 +6,11 @@ Arthas 注入封装
 import subprocess
 
 from kubectl_utils import run_kubectl  # 复用带重试的 kubectl 执行函数
+from config import ARTHAS_PARENT_DIR  # 本地 arthas 工具所在目录（可配置，见 config.py）
 
-# 本地 arthas 工具所在位置（arthas 文件夹的父目录）
-# 用它作为工作目录，用相对路径 "arthas"，避开 Windows 盘符冒号(c:)的坑
-ARTHAS_PARENT_DIR = r"c:\Users\huaji\Desktop\computer\AAAproject\arthas\arthas\arthas"
+# 说明：ARTHAS_PARENT_DIR 是 arthas 工具文件夹的父目录。
+# 用它作为工作目录、用相对路径 "arthas" 拷贝，避开 Windows 盘符冒号(c:)的坑。
+# 默认指向 <项目根>/arthas/arthas，可用环境变量 ARTHAS_PARENT_DIR 覆盖。
 
 
 def copy_arthas_to_pod(pod, namespace="default", copy_path="/tmp/arthas"):
