@@ -97,6 +97,15 @@ python app.py          # 服务起在 http://127.0.0.1:8000
 2. 把 **Pod** 填成你要诊断的应用（Web 应用），保持"自动打流量"勾选
 3. 点 **② 慢接口 / ③ 匹配方法 / ⑥ 链路** → 自动打流量并返回结果
 
+### 运行单元测试
+
+解析逻辑（`has_match` / `extract_uris` / `filter_match_method`）有 pytest 用例：
+
+```powershell
+cd arthas-api
+..\.venv\Scripts\python.exe -m pytest test_diagnose.py -v
+```
+
 ### 直接调 API（示例）
 
 ```bash
