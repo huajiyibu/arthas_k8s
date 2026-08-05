@@ -6,6 +6,10 @@ __pycache__/
 # ---------- Java / Maven 构建产物 ----------
 web-app/target/
 
+# ---------- Arthas 工具二进制（体积大，用 scripts/download_arthas.ps1 下载） ----------
+arthas/arthas/arthas/
+arthas/arthas.zip
+
 # ---------- 敏感/本地验证脚本（含 SSH/sudo 密码，禁止上传） ----------
 sudoer_setup.sh
 verify_*.sh
