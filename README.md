@@ -73,7 +73,12 @@ arthas/
 - `kubectl` 能访问目标集群；目标 Pod 为 **JDK 版** Java 应用（JRE 无法 attach）
 
 ### 配置（机器相关项，默认即可用）
-- **Arthas 工具位置**：默认取 `<项目根>/arthas/arthas`（仓库已内置 Arthas 工具，clone 下来就能用）。
+- **Arthas 工具位置**：默认取 `<项目根>/arthas/arthas`。
+  仓库**不内置 Arthas 二进制**（体积大），首次使用先运行下载脚本：
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File scripts\download_arthas.ps1   # Windows
+  bash scripts/download_arthas.sh                                        # Linux/macOS
+  ```
   若装在别处，用环境变量覆盖：`set ARTHAS_PARENT_DIR=D:/tools/arthas`
 - 集中管理在 [`arthas-api/config.py`](./arthas-api/config.py)，所有配置**环境变量优先**。
 
